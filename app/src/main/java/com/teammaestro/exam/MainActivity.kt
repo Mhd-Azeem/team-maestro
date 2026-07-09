@@ -3,6 +3,7 @@ package com.teammaestro.exam
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.view.KeyEvent
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -20,6 +21,12 @@ class MainActivity : AppCompatActivity() {
 
         webView = findViewById(R.id.webView)
 
+        // Persist cookies across app restarts so the user stays logged in
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
+        }
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
@@ -33,11 +40,13 @@ class MainActivity : AppCompatActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            databaseEnabled = true
             loadWithOverviewMode = true
             useWideViewPort = true
             setSupportZoom(true)
             builtInZoomControls = true
             displayZoomControls = false
+            // Use cached data so the site loads faster and sessions survive
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
@@ -52,6 +61,12 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         webView.saveState(outState)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Write cookies to disk so they survive process death
+        CookieManager.getInstance().flush()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
