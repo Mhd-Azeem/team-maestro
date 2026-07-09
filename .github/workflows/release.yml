@@ -54,17 +54,29 @@ jobs:
           retention-days: 7
 
       # Signed release build (tag push only)
-      - name: Decode keystore
+      # Uses production keystore from secrets if available; otherwise generates a
+      # temporary self-signed keystore so the release APK is always installable.
+      - name: Prepare signing keystore
         if: github.event_name == 'push'
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
+          else
+            keytool -genkeypair -v \
+              -keystore app/keystore.jks \
+              -alias teammaestro \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=TeamMaestro, OU=Dev, O=TeamMaestro, L=Unknown, ST=Unknown, C=US" \
+              -storepass android -keypass android
+          fi
 
       - name: Build signed release APK
         if: github.event_name == 'push'
         env:
           KEYSTORE_PATH: keystore.jks
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'teammaestro' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK to versioned filename
