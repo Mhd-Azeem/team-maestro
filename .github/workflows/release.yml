@@ -1,8 +1,17 @@
 name: Build & Release APK
 
 on:
-  # Manual trigger — builds a debug APK with no signing secrets required
+  # Manual trigger — pass release=true + version to publish a GitHub Release
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a GitHub Release with this build?'
+        type: boolean
+        default: false
+      version:
+        description: 'Release version (e.g. v1.0.0) — required when release is true'
+        type: string
+        default: 'v1.0.0'
 
   # Tag trigger — builds a signed release APK and publishes a GitHub Release
   push:
@@ -40,24 +49,39 @@ jobs:
           fi
           chmod +x gradlew
 
-      # Debug build (workflow_dispatch only, no secrets needed)
+      - name: Resolve build mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || \
+             [ "${{ github.event.inputs.release }}" = "true" ]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            else
+              echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Debug build (non-release workflow_dispatch only)
       - name: Build debug APK
-        if: github.event_name == 'workflow_dispatch'
+        if: steps.mode.outputs.is_release == 'false'
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload debug APK artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: steps.mode.outputs.is_release == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: TeamMaestroExam-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      # Signed release build (tag push only)
-      # Uses production keystore from secrets if available; otherwise generates a
-      # temporary self-signed keystore so the release APK is always installable.
+      # Release build — works with or without production signing secrets.
+      # If KEYSTORE_BASE64 is configured, the APK is signed with your production key.
+      # Otherwise, a temporary self-signed key is generated automatically.
       - name: Prepare signing keystore
-        if: github.event_name == 'push'
+        if: steps.mode.outputs.is_release == 'true'
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
@@ -71,7 +95,7 @@ jobs:
           fi
 
       - name: Build signed release APK
-        if: github.event_name == 'push'
+        if: steps.mode.outputs.is_release == 'true'
         env:
           KEYSTORE_PATH: keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'android' }}
@@ -80,15 +104,16 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK to versioned filename
-        if: github.event_name == 'push'
+        if: steps.mode.outputs.is_release == 'true'
         run: |
           mv app/build/outputs/apk/release/app-release.apk \
-             "app/build/outputs/apk/release/TeamMaestroExam-${{ github.ref_name }}.apk"
+             "app/build/outputs/apk/release/TeamMaestroExam-${{ steps.mode.outputs.version }}.apk"
 
       - name: Create GitHub Release and upload APK
-        if: github.event_name == 'push'
+        if: steps.mode.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          name: "Team Maestro Exam ${{ github.ref_name }}"
+          tag_name: ${{ steps.mode.outputs.version }}
+          name: "Team Maestro Exam ${{ steps.mode.outputs.version }}"
           generate_release_notes: true
-          files: "app/build/outputs/apk/release/TeamMaestroExam-${{ github.ref_name }}.apk"
+          files: "app/build/outputs/apk/release/TeamMaestroExam-${{ steps.mode.outputs.version }}.apk"
