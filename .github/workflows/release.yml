@@ -1,6 +1,10 @@
 name: Build & Release APK
 
 on:
+  # Manual trigger — builds a debug APK with no signing secrets required
+  workflow_dispatch:
+
+  # Tag trigger — builds a signed release APK and publishes a GitHub Release
   push:
     tags:
       - 'v*.*.*'
@@ -9,7 +13,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Required so the job can create GitHub Releases and upload assets
     permissions:
       contents: write
 
@@ -29,44 +32,53 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'      # used as fallback if wrapper jar is absent
+          gradle-version: '8.7'
 
       # ── 4. Ensure the Gradle wrapper jar exists ───────────────────────────
-      # The wrapper .jar is a binary that many teams omit from git.
-      # If it is missing we regenerate it here using the standalone Gradle
-      # binary installed above; the .properties file pins the exact version.
       - name: Ensure Gradle wrapper jar exists
         run: |
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "wrapper jar missing – regenerating from gradle-wrapper.properties"
             GRADLE_VER=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties \
               | sed 's/.*gradle-\([0-9.]*\)-bin.zip/\1/')
             gradle wrapper --gradle-version="${GRADLE_VER:-8.7}"
           fi
           chmod +x gradlew
 
-      # ── 5. Keystore ────────────────────────────────────────────────────────
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
+      # ── 5a. Debug build (workflow_dispatch only, no secrets needed) ────────
+      - name: Build debug APK
+        if: github.event_name == 'workflow_dispatch'
+        run: ./gradlew assembleDebug --no-daemon
 
-      # ── 6. Build ───────────────────────────────────────────────────────────
+      - name: Upload debug APK artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeamMaestroExam-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      # ── 5b. Signed release build (tag push only) ─────────────────────────
+      - name: Decode keystore
+        if: github.event_name == 'push'
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
+
       - name: Build signed release APK
+        if: github.event_name == 'push'
         env:
-          KEYSTORE_PATH: keystore.jks        # relative to app/ — matches storeFile in build.gradle
+          KEYSTORE_PATH: keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon
 
-      # ── 7. Rename ──────────────────────────────────────────────────────────
       - name: Rename APK to versioned filename
+        if: github.event_name == 'push'
         run: |
           mv app/build/outputs/apk/release/app-release.apk \
              "app/build/outputs/apk/release/TeamMaestroExam-${{ github.ref_name }}.apk"
 
-      # ── 8. GitHub Release ─────────────────────────────────────────────────
       - name: Create GitHub Release and upload APK
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           name: "Team Maestro Exam ${{ github.ref_name }}"
